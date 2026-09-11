@@ -1,0 +1,69 @@
+{
+  "canales": {
+    "general": "",
+    "tokens_nuevos": "",
+    "tendencias": "",
+    "influencers": "",
+    "noticias": ""
+  },
+
+  "general": {
+    "anunciar_al_iniciar": false,
+    "max_alertas_por_ciclo": 8
+  },
+
+  "intervalos_seg": {
+    "tokens_nuevos": 60,
+    "tendencias": 300,
+    "x": 120,
+    "noticias": 600
+  },
+
+  "tokens_nuevos": {
+    "activo": true,
+    "redes": ["solana", "base", "ethereum", "bsc"],
+    "filtros": {
+      "liquidez_min_usd": 10000,
+      "mcap_min_usd": 20000,
+      "mcap_max_usd": 20000000,
+      "volumen_24h_min_usd": 5000,
+      "edad_max_horas": 72
+    }
+  },
+
+  "tendencias": {
+    "activo": true,
+    "redes_gecko": ["solana", "base"],
+    "repetir_despues_de_horas": 12,
+    "simbolos_ignorados": ["SOL", "WSOL", "USDC", "USDT", "ETH", "WETH", "CBBTC", "WBTC", "BNB", "WBNB", "DAI", "JITOSOL", "MSOL", "JUP"],
+    "filtros": {
+      "liquidez_min_usd": 25000,
+      "mcap_min_usd": 50000,
+      "mcap_max_usd": 500000000,
+      "volumen_24h_min_usd": 50000,
+      "edad_max_horas": 0
+    }
+  },
+
+  "x": {
+    "activo": true,
+    "siempre": ["CoinMarketCap", "solana", "Bitcoin", "coinbase", "orangie", "moonshot", "MustStopMurad"],
+    "solo_si_menciona_cripto": ["elonmusk", "realDonaldTrump", "BarackObama", "JoeBiden", "vladtenev"],
+    "palabras_cripto": ["crypto", "bitcoin", "btc", "doge", "dogecoin", "memecoin", "memecoins", "solana", "ethereum", "blockchain", "coin", "token", "stablecoin", "defi", "web3"],
+    "usar_has_cashtags": true,
+    "incluir_respuestas": false,
+    "cashtags_ignorados": ["BTC", "ETH", "SOL", "USDT", "USDC", "BNB", "XRP", "ADA", "DOGE", "TRX", "LTC", "DOT", "AVAX", "LINK", "TSLA", "HOOD", "COIN", "NVDA", "AAPL", "SPY"],
+    "rol_ping_id": "",
+    "ping_en": ["elonmusk", "realDonaldTrump"]
+  },
+
+  "noticias": {
+    "activo": true,
+    "filtro_palabras": ["memecoin", "meme coin", "meme", "solana", "pump.fun", "pumpfun", "doge", "shib", "pepe", "bonk", "trump", "airdrop", "listing", "launch", "coinbase", "binance", "robinhood", "altcoin"],
+    "feeds": [
+      { "nombre": "CoinTelegraph", "url": "https://cointelegraph.com/rss" },
+      { "nombre": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/" },
+      { "nombre": "Decrypt", "url": "https://decrypt.co/feed" }
+    ]
+  }
+}

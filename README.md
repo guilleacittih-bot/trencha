@@ -1,155 +1,72 @@
-# Crypto Discord Alert Bot
+# 📡 Radar de Memecoins — Bot de Discord
 
-Bot de Discord en Python para publicar automáticamente:
+Bot en Python que vigila el mundo de las memecoins y publica alertas con imagen y detalles en tus canales de Discord.
 
-- Noticias de criptomonedas.
-- Noticias relacionadas con Donald Trump + crypto.
-- Proyectos/tokens emergentes usando datos de CoinMarketCap.
-- Señales de lanzamiento, listing, airdrop, mainnet, financiación, etc.
-- Alertas con embeds.
-- Base SQLite para no repetir noticias.
-- Comandos `/status` y `/check`.
+| Fuente | Qué detecta | Costo |
+|---|---|---|
+| **DexScreener** | Proyectos nuevos que acaban de crear su perfil (Solana, Base, Ethereum, BSC…) | Gratis |
+| **GeckoTerminal** | Tokens en tendencia por red | Gratis |
+| **X (Twitter)** | Posts de CoinMarketCap, Trump, Obama, Biden, Elon Musk, Solana, Bitcoin, orangie, Moonshot, Vlad Tenev, MustStopMurad, Coinbase | De pago (pay-per-use) |
+| **RSS** | Noticias de CoinTelegraph, CoinDesk, Decrypt (filtradas por palabras clave) | Gratis |
 
-## 1. Requisitos
+Cada alerta de token trae: logo, banner, precio, market cap, liquidez, volumen, cambio 1h/24h, edad del par, compras/ventas, contrato, links (web, X, Telegram, DexScreener, RugCheck, explorador) y **señales de riesgo** automáticas.
 
-Python 3.11 o superior recomendado.
+Cuando un influencer publica un **contrato** o un **$TICKER**, el bot lo busca en DexScreener y agrega los datos del token al mismo mensaje.
 
-## 2. Instalar
+Comandos: `/token <contrato o $TICKER>` y `/estado`.
 
-Windows:
+---
 
-```powershell
-py -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
+## 1. Crear el bot en Discord
 
-Linux/macOS:
+1. Entrá a https://discord.com/developers/applications → **New Application**.
+2. En **Bot** → **Reset Token** y copiá el token (va en `DISCORD_TOKEN`).
+3. En **OAuth2 → URL Generator** marcá los scopes `bot` y `applications.commands`, y los permisos **Send Messages**, **Embed Links** y **Mention Everyone** (este último solo si vas a usar el ping a un rol).
+4. Abrí la URL generada e invitá el bot a tu servidor.
+5. En Discord activá **Modo desarrollador** (Ajustes → Avanzado), hacé clic derecho en el canal → **Copiar ID** y ponelo en la variable `CANAL_GENERAL` (o en `config.json` → `canales`).
+
+Si solo completás el canal general, todo se publica ahí. Si completás los demás, cada tipo de alerta va a su canal.
+
+## 2. Token de X (opcional pero necesario para los influencers)
+
+La API de X ya no tiene plan gratis: funciona con créditos prepagos y se cobra por cada post leído. Pasos:
+
+1. Creá una app en el **Developer Console** de X y cargá créditos.
+2. **Poné un límite de gasto** en la consola para evitar sorpresas.
+3. Copiá el **Bearer Token** en `X_BEARER_TOKEN`.
+
+Para gastar poco, el bot ya viene optimizado: agrupa todas las cuentas en 2 búsquedas (en vez de una llamada por cuenta), pide solo los posts nuevos (`since_id`), excluye retweets y respuestas, cachea los perfiles 7 días, y para Trump/Obama/Biden/Elon/Vlad solo trae los posts que hablan de cripto o tienen un `$TICKER`. El costo real depende de cuánto publiquen esas cuentas; revisá el consumo en la consola los primeros días.
+
+Sin `X_BEARER_TOKEN` el bot funciona igual con el resto de las fuentes.
+
+## 3. Correrlo en tu PC
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-## 3. Crear el bot
-
-1. Entra al Discord Developer Portal.
-2. Crea una Application.
-3. Entra en Bot y crea el bot.
-4. Copia el token.
-5. Invita el bot a tu servidor con permisos para:
-   - View Channels
-   - Send Messages
-   - Embed Links
-6. Copia el token al `.env`.
-
-Este proyecto usa slash commands, por lo que no necesita leer el contenido de los mensajes del servidor.
-
-## 4. Crear canales
-
-Crea, por ejemplo:
-
-- `#crypto-alertas`
-- `#proyectos-emergentes`
-
-Copia los IDs de ambos canales al `.env`.
-
-Para copiar IDs debes activar Developer Mode en Discord y usar Copy Channel ID.
-
-## 5. CoinMarketCap
-
-Crea una API key de CoinMarketCap y ponla en:
-
-```env
-CMC_API_KEY=TU_API_KEY
-```
-
-Sin API key, las fuentes RSS de noticias seguirán funcionando.
-
-## 6. Ejecutar
-
-```powershell
+cp .env.example .env      # completá DISCORD_TOKEN y CANAL_GENERAL (y X_BEARER_TOKEN si tenés)
+# en tu PC cambiá DB_PATH a data/radar.db
 python bot.py
 ```
 
-Al arrancar, el bot sincroniza:
+La **primera vuelta de cada fuente no publica nada**: solo marca lo que ya existe, para no inundar el canal. A partir de ahí anuncia lo nuevo. (Si querés que publique al arrancar, poné `"anunciar_al_iniciar": true`).
 
-```text
-/status
-/check
-```
+## 4. Desplegar en Railway
 
-`/check` fuerza una revisión inmediata.
+Seguí la guía completa paso a paso en **`GUIA_RAILWAY.md`**. Los IDs de canales y del rol se pueden cargar como variables de Railway (`CANAL_GENERAL`, `CANAL_TOKENS_NUEVOS`, `CANAL_TENDENCIAS`, `CANAL_INFLUENCERS`, `CANAL_NOTICIAS`, `ROL_PING_ID`), así que no hace falta editar `config.json` para arrancar. `railway.json` ya define el comando de inicio y el reinicio automático.
 
-## 7. Qué detecta
+## 5. Ajustar `config.json`
 
-### Trump
-Busca términos como:
+- **`tokens_nuevos.filtros`**: liquidez mínima, market cap mínimo/máximo, volumen 24h mínimo y edad máxima del par. Subí los mínimos si llegan demasiadas alertas.
+- **`tendencias.redes_gecko`**: redes de GeckoTerminal (`solana`, `base`, `eth`, `bsc`…).
+- **`x.siempre`**: cuentas de las que se publica todo.
+- **`x.solo_si_menciona_cripto`**: cuentas que solo se publican si hablan de cripto.
+- **`x.rol_ping_id`** + **`x.ping_en`**: ID de un rol para mencionar cuando postea una cuenta VIP (ej. Elon o Trump).
+- **`x.cashtags_ignorados`**: tickers que no se buscan en DEX (BTC, ETH, acciones como TSLA/HOOD/COIN…), para no confundirlos con copias.
+- **`noticias.feeds`**: agregá cualquier RSS. Cada feed acepta `"canal": "influencers"` para mandarlo a otro canal y `"sin_filtro": true` para publicar todo sin filtrar por palabras.
 
-- Donald Trump
-- Trump crypto
-- Trump Bitcoin
-- Trump Ethereum
-- Trump SEC
-- Trump Bitcoin reserve
+## Notas importantes
 
-### Proyectos
-Busca noticias que mencionen:
-
-- new token
-- new project
-- launch
-- mainnet
-- testnet
-- airdrop
-- listing
-- presale
-- funding
-- seed round
-
-### CoinMarketCap
-El módulo `crypto.py` utiliza el endpoint de listings para encontrar activos dentro del rango configurado de market cap y con actividad/momentum suficiente para ser considerados candidatos emergentes.
-
-## 8. Personalización
-
-Edita `feeds.py` para añadir fuentes RSS.
-
-Edita `.env` para cambiar:
-
-```env
-CHECK_INTERVAL_MINUTES=5
-MIN_PROJECT_MARKET_CAP_USD=100000
-MAX_PROJECT_MARKET_CAP_USD=50000000
-MIN_VOLUME_CHANGE_PERCENT=50
-```
-
-
-## 9. Monitoreo de X
-
-El bot puede vigilar estas cuentas mediante la API oficial de X:
-
-- `@MachiBigBrother`
-- `@VladTenev`
-- `@Raydium`
-- `@Polymarket`
-- `@MuststopMurad`
-- `@BarackObama`
-- `@binance`
-- `@JoeBiden`
-
-Añade en `.env`:
-
-```env
-X_BEARER_TOKEN=TU_BEARER_TOKEN_DE_X
-```
-
-El bot consulta publicaciones recientes y envía cada publicación nueva al canal de noticias, evitando duplicados mediante SQLite.
-
-La cuenta debe existir con ese nombre en X y el acceso de tu proyecto a X API debe permitir el endpoint de búsqueda reciente. Si una cuenta cambia de nombre o X limita el acceso, esa fuente dejará de producir alertas hasta actualizar la configuración.
-
-## Importante
-
-Las alertas son informativas. Un proyecto con volumen o crecimiento alto puede ser muy especulativo, tener baja liquidez o ser una estafa. El bot NO debe interpretarse como sistema automático de compra/venta.
-
-Nunca publiques tu `DISCORD_TOKEN` ni tu `CMC_API_KEY` en GitHub.
+- **Verificá los handles de X** (en especial `moonshot` y `orangie`). Si alguno está mal o la cuenta no existe, el bot lo avisa en el log con `cuenta no encontrada`.
+- **Trump publica sobre todo en Truth Social**, no en X. El bot cubre su cuenta de X; si conseguís un feed RSS de su Truth Social, agregalo en `noticias.feeds` con `"canal": "influencers"`.
+- Si X rechaza la búsqueda por el operador `has:cashtags`, poné `"usar_has_cashtags": false`.
+- La mayoría de los tokens nuevos de memecoins son de altísimo riesgo (rug pulls, honeypots, copias). Las "señales de riesgo" son solo un filtro básico: el bot informa, no recomienda comprar nada.
