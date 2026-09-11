@@ -94,7 +94,7 @@ class Radar(discord.Client):
             # borra comandos globales viejos (ej. de otro bot que usó esta misma aplicación)
             self.tree.clear_commands(guild=None)
             await self.tree.sync()
-            log.info("Comandos /token y /estado registrados en el servidor %s", gid)
+            log.info("Comandos registrados en el servidor %s", gid)
         else:    # global: puede tardar en aparecer
             await self.tree.sync()
 
@@ -146,8 +146,11 @@ class Radar(discord.Client):
 
     # ─────────────────────────── envío ───────────────────────────
 
-    async def enviar(self, tipo_canal: str, embed: discord.Embed, contenido: str | None = None) -> bool:
-        cid = CFG["canales"].get(tipo_canal) or CFG["canales"].get("general")
+    async def enviar(self, tipo_canal: str, embeds, contenido: str | None = None,
+                     canal_id: str | None = None) -> bool:
+        if isinstance(embeds, discord.Embed):
+            embeds = [embeds]
+        cid = canal_id or CFG["canales"].get(tipo_canal) or CFG["canales"].get("general")
         if not cid:
             log.error("No hay canal configurado para '%s' ni canal 'general'", tipo_canal)
             return False
@@ -159,15 +162,16 @@ class Radar(discord.Client):
                 log.error("No puedo acceder al canal %s: %s", cid, e)
                 return False
         try:
-            await canal.send(content=contenido, embed=embed, allowed_mentions=self.menciones)
+            await canal.send(content=contenido, embeds=embeds, allowed_mentions=self.menciones)
             return True
         except discord.HTTPException as e:
-            # casi siempre es una URL de imagen inválida: reintento sin imágenes
+            # casi siempre es una URL de imagen inválida: reintento solo con el embed principal y sin imágenes
             log.warning("Discord rechazó el embed (%s); reintento sin imágenes", e)
-            embed.set_image(url=None)
-            embed.set_thumbnail(url=None)
+            principal = embeds[0]
+            principal.set_image(url=None)
+            principal.set_thumbnail(url=None)
             try:
-                await canal.send(content=contenido, embed=embed, allowed_mentions=self.menciones)
+                await canal.send(content=contenido, embed=principal, allowed_mentions=self.menciones)
                 return True
             except discord.HTTPException as e2:
                 log.error("No se pudo enviar la alerta: %s", e2)
@@ -273,59 +277,100 @@ class Radar(discord.Client):
 
     # ─────────────────────────── ciclo: X / influencers ───────────────────────────
 
+    def cuentas_x(self) -> dict[str, dict]:
+        """Cuentas activas: las de config.json + las agregadas con /add (estas tienen prioridad)."""
+        cfg = CFG["x"]
+        cuentas = {}
+        for lista, modo in ((cfg.get("siempre", []), "todo"), (cfg.get("solo_si_menciona_cripto", []), "cripto")):
+            for u in lista:
+                u = u.lstrip("@").strip()
+                if u:
+                    cuentas[u.lower()] = {"usuario": u, "modo": modo, "canal": None, "origen": "config"}
+        for fila in self.db.cuentas_x():
+            k = fila["usuario"].lower()
+            if fila["modo"] == "off":
+                cuentas.pop(k, None)
+            else:
+                cuentas[k] = {**fila, "origen": "comando"}
+        return cuentas
+
+    def _en_config_x(self, usuario: str) -> bool:
+        cfg = CFG["x"]
+        return usuario.lower() in {u.lower().lstrip("@") for u in cfg.get("siempre", []) + cfg.get("solo_si_menciona_cripto", [])}
+
+    def _guardar_cache_usuarios(self, nombres: list[str]):
+        firma = ",".join(sorted(n.lower() for n in nombres))
+        self.db.set("x_usuarios", json.dumps({"firma": firma, "ts": time.time(), "usuarios": self.usuarios_x}))
+
     async def _cargar_usuarios_x(self, nombres: list[str]):
         """Perfiles (nombre, avatar) cacheados 7 días: leer usuarios en X también cuesta."""
-        firma = ",".join(sorted(n.lower().lstrip("@") for n in nombres))
+        firma = ",".join(sorted(n.lower() for n in nombres))
         cache = json.loads(self.db.get("x_usuarios", "{}"))
         if cache.get("firma") == firma and time.time() - cache.get("ts", 0) < 7 * 86400:
             self.usuarios_x = cache["usuarios"]
             return
-        usuarios = await self.x.usuarios(nombres)
-        if usuarios:
-            self.usuarios_x = usuarios
-            self.db.set("x_usuarios", json.dumps({"firma": firma, "ts": time.time(), "usuarios": usuarios}))
+        conocidos = {u["username"].lower() for u in cache.get("usuarios", {}).values()}
+        faltan = [n for n in nombres if n.lower() not in conocidos]
+        if time.time() - cache.get("ts", 0) >= 7 * 86400:
+            faltan = nombres  # refresco semanal de todos (avatares nuevos, etc.)
+        nuevos = await self.x.usuarios(faltan) if faltan else {}
+        self.usuarios_x = {**cache.get("usuarios", {}), **nuevos}
+        if self.usuarios_x:
+            self._guardar_cache_usuarios(nombres)
 
     async def ciclo_x(self, anunciar: bool):
         if not self.x:
             return
         cfg = CFG["x"]
-        await self._cargar_usuarios_x(cfg["siempre"] + cfg["solo_si_menciona_cripto"])
+        cuentas = self.cuentas_x()
+        if not cuentas:
+            return
+        await self._cargar_usuarios_x([c["usuario"] for c in cuentas.values()])
         queries = F.construir_queries(
-            cfg["siempre"], cfg["solo_si_menciona_cripto"], cfg.get("palabras_cripto", []),
+            [c["usuario"] for c in cuentas.values() if c["modo"] == "todo"],
+            [c["usuario"] for c in cuentas.values() if c["modo"] == "cripto"],
+            cfg.get("palabras_cripto", []),
             incluir_respuestas=cfg.get("incluir_respuestas", False),
             usar_has_cashtags=cfg.get("usar_has_cashtags", True),
         )
+        # Los IDs de X crecen con el tiempo: una búsqueda nueva (por ej. tras un /add) arranca
+        # desde el post más nuevo ya visto, así no se pierde nada ni se repiten posts viejos.
+        since_global = self.db.get("x_since_global")
+        nuevo_global = int(since_global) if since_global else 0
         for q in queries:
             qid = hashlib.sha1(q.encode()).hexdigest()[:12]
-            since = self.db.get(f"x_since:{qid}")
-            iniciada = self.db.get(f"x_ini:{qid}") == "1"
+            since = self.db.get(f"x_since:{qid}") or since_global
             res = await self.x.buscar(q, since)
             if res is None:
                 continue
             if res["newest"]:
                 self.db.set(f"x_since:{qid}", res["newest"])
-            self.db.set(f"x_ini:{qid}", "1")
-            # primera vez con esta búsqueda: solo marca el punto de partida (no inunda el canal)
-            if (not iniciada or res["reiniciado"]) and not CFG["general"].get("anunciar_al_iniciar", False):
+                nuevo_global = max(nuevo_global, int(res["newest"]))
+            # primera vez que corre el bot: solo marca el punto de partida (no inunda el canal)
+            if (not since or res["reiniciado"]) and not CFG["general"].get("anunciar_al_iniciar", False):
                 continue
             for post in sorted(res["posts"], key=lambda p: int(p["id"])):
                 if self.db.visto("post", post["id"]):
                     continue
                 self.db.marcar("post", post["id"])
-                await self._publicar_post(post, res["media"])
+                await self._publicar_post(post, res["media"], cuentas)
+        if nuevo_global:
+            self.db.set("x_since_global", str(nuevo_global))
 
-    async def _publicar_post(self, post: dict, media: dict):
+    async def _publicar_post(self, post: dict, media: dict, cuentas: dict):
         autor = self.usuarios_x.get(post.get("author_id"), {})
+        usuario = (autor.get("username") or "").lower()
         texto = F.texto_post(post)
         tokens = await self.detectar_tokens(texto, post)
-        embed = E.embed_post(post, autor, texto, F.imagen_post(post, media), tokens)
+        embeds = E.embed_post(post, autor, texto, F.medios_post(post, media), tokens)
 
         ping = None
         rol = str(CFG["x"].get("rol_ping_id") or "").strip()
         vip = {u.lower().lstrip("@") for u in CFG["x"].get("ping_en", [])}
-        if rol and (autor.get("username") or "").lower() in vip:
+        if rol and usuario in vip:
             ping = f"<@&{rol}>"
-        if await self.enviar("influencers", embed, ping):
+        canal_propio = (cuentas.get(usuario) or {}).get("canal")
+        if await self.enviar("influencers", embeds, ping, canal_id=canal_propio):
             self.estado["x"]["alertas"] += 1
 
     async def detectar_tokens(self, texto: str, post: dict | None = None, maximo=3):
@@ -410,6 +455,94 @@ def registrar_comandos(bot: Radar):
             nota = (f"Hay {len(pares)} tokens que coinciden; muestro el de mayor liquidez. "
                     "Si buscás uno puntual, usá la dirección del contrato.")
         await inter.followup.send(embed=E.embed_token(pares[0], "consulta", nota=nota))
+
+    @bot.tree.command(name="add", description="Agrega una cuenta de X: sus posts nuevos llegan a Discord")
+    @app_commands.describe(
+        usuario="Usuario de X (lo que va después de la @), ej: elonmusk. También sirve el link del perfil",
+        modo="Qué posts enviar (por defecto: todo)",
+        canal="Canal donde mandar sus posts (por defecto: el de influencers)",
+    )
+    @app_commands.choices(modo=[
+        app_commands.Choice(name="Todo lo que publique", value="todo"),
+        app_commands.Choice(name="Solo si habla de cripto o usa un $TICKER", value="cripto"),
+    ])
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def add(inter: discord.Interaction, usuario: str,
+                  modo: app_commands.Choice[str] | None = None,
+                  canal: discord.TextChannel | None = None):
+        if not bot.x:
+            await inter.response.send_message("⛔ X no está activo: falta la variable `X_BEARER_TOKEN` en Railway.", ephemeral=True)
+            return
+        nombre = F.normalizar_usuario_x(usuario)
+        if not nombre:
+            await inter.response.send_message(
+                "❌ Poné el **usuario** de X, no el nombre: es lo que va después de la @ "
+                "(ej. `/add usuario:elonmusk`). También podés pegar el link del perfil.", ephemeral=True)
+            return
+        if canal:
+            permisos = canal.permissions_for(canal.guild.me)
+            if not (permisos.view_channel and permisos.send_messages and permisos.embed_links):
+                await inter.response.send_message(
+                    f"❌ No tengo permisos para escribir en {canal.mention} "
+                    "(necesito Ver canal, Enviar mensajes e Insertar enlaces).", ephemeral=True)
+                return
+        await inter.response.defer(thinking=True)
+        encontrados = await bot.x.usuarios([nombre])
+        perfil = next((u for u in encontrados.values() if u["username"].lower() == nombre.lower()), None)
+        if not perfil:
+            await inter.followup.send(f"❌ No encontré la cuenta **@{nombre}** en X (¿está bien escrita? ¿es pública?).")
+            return
+        valor_modo = modo.value if modo else "todo"
+        canal_id = str(canal.id) if canal else None
+        bot.db.guardar_cuenta_x(perfil["username"], valor_modo, canal_id)
+        bot.usuarios_x[perfil["id"]] = perfil
+        bot._guardar_cache_usuarios([c["usuario"] for c in bot.cuentas_x().values()])
+        log.info("Cuenta de X agregada: @%s (%s) por %s", perfil["username"], valor_modo, inter.user)
+        await inter.followup.send(embed=E.embed_cuenta_x(perfil, valor_modo, canal_id, "✅ Cuenta agregada al radar"))
+
+    @bot.tree.command(name="quitar", description="Deja de seguir una cuenta de X")
+    @app_commands.describe(usuario="Cuenta a quitar")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def quitar(inter: discord.Interaction, usuario: str):
+        nombre = (F.normalizar_usuario_x(usuario) or usuario).lower()
+        cuenta = bot.cuentas_x().get(nombre)
+        if not cuenta:
+            await inter.response.send_message(f"No estoy siguiendo a **@{nombre}**. Usá `/cuentas` para ver la lista.", ephemeral=True)
+            return
+        if bot._en_config_x(nombre):
+            bot.db.guardar_cuenta_x(cuenta["usuario"], "off")  # viene de config.json: se desactiva
+        else:
+            bot.db.borrar_cuenta_x(cuenta["usuario"])
+        log.info("Cuenta de X quitada: @%s por %s", cuenta["usuario"], inter.user)
+        await inter.response.send_message(f"🗑️ Listo, ya no sigo a **@{cuenta['usuario']}**.")
+
+    @quitar.autocomplete("usuario")
+    async def quitar_autocompletar(inter: discord.Interaction, actual: str):
+        return [app_commands.Choice(name=f"@{c['usuario']}", value=c["usuario"])
+                for c in bot.cuentas_x().values() if actual.lower().lstrip("@") in c["usuario"].lower()][:25]
+
+    @bot.tree.command(name="cuentas", description="Lista las cuentas de X que sigue el radar")
+    async def cuentas(inter: discord.Interaction):
+        lista = list(bot.cuentas_x().values())
+        e = discord.Embed(title=f"🐦 Cuentas de X seguidas ({len(lista)})", color=0x1D9BF0)
+        if not bot.x:
+            e.description = "⛔ X está desactivado (falta `X_BEARER_TOKEN`)."
+        lineas = []
+        for c in lista:
+            modo = "todo" if c["modo"] == "todo" else "solo cripto"
+            destino = f" → <#{c['canal']}>" if c.get("canal") else ""
+            lineas.append(f"`@{c['usuario']}` · {modo}{destino}")
+        bloque = ""
+        for linea in lineas or ["(ninguna)"]:
+            if len(bloque) + len(linea) + 1 > 1000:
+                e.add_field(name="\u200b", value=bloque, inline=False)
+                bloque = ""
+            bloque += linea + "\n"
+        e.add_field(name="\u200b", value=bloque, inline=False)
+        e.set_footer(text="Agregá con /add · quitá con /quitar")
+        await inter.response.send_message(embed=e, ephemeral=True)
 
     @bot.tree.command(name="estado", description="Estado de las fuentes del radar")
     async def estado(inter: discord.Interaction):

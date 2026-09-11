@@ -1,4 +1,6 @@
 """Almacenamiento mínimo en SQLite: qué ya se anunció y estado de las fuentes."""
+from __future__ import annotations
+
 import os
 import sqlite3
 import time
@@ -20,6 +22,12 @@ class DB:
             CREATE TABLE IF NOT EXISTS estado (
                 clave TEXT PRIMARY KEY,
                 valor TEXT
+            );
+            CREATE TABLE IF NOT EXISTS cuentas_x (
+                usuario TEXT COLLATE NOCASE PRIMARY KEY,
+                modo    TEXT NOT NULL,          -- 'todo', 'cripto' u 'off' (desactivada)
+                canal   TEXT,                   -- canal propio (opcional)
+                ts      INTEGER NOT NULL
             );
         """)
         self.c.commit()
@@ -45,3 +53,17 @@ class DB:
     def limpiar(self, dias: int = 30):
         self.c.execute("DELETE FROM vistos WHERE ts < ?", (int(time.time() - dias * 86400),))
         self.c.commit()
+
+    # ── cuentas de X agregadas con /add ──
+    def guardar_cuenta_x(self, usuario: str, modo: str, canal: str | None = None):
+        self.c.execute("INSERT OR REPLACE INTO cuentas_x VALUES (?, ?, ?, ?)",
+                       (usuario, modo, canal, int(time.time())))
+        self.c.commit()
+
+    def borrar_cuenta_x(self, usuario: str):
+        self.c.execute("DELETE FROM cuentas_x WHERE usuario = ?", (usuario,))
+        self.c.commit()
+
+    def cuentas_x(self) -> list[dict]:
+        filas = self.c.execute("SELECT usuario, modo, canal FROM cuentas_x ORDER BY ts").fetchall()
+        return [{"usuario": u, "modo": m, "canal": c} for u, m, c in filas]

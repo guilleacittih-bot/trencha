@@ -351,13 +351,28 @@ def texto_post(post: dict) -> str:
     return html.unescape((post.get("note_tweet") or {}).get("text") or post.get("text") or "")
 
 
-def imagen_post(post: dict, media: dict) -> str | None:
+def medios_post(post: dict, media: dict) -> list[dict]:
+    """Fotos, videos y GIFs adjuntos al post (con la URL de la imagen o de la vista previa)."""
+    salida = []
     for k in (post.get("attachments") or {}).get("media_keys") or []:
         m = media.get(k) or {}
-        u = m.get("url") or m.get("preview_image_url")
-        if url_ok(u):
-            return u
-    return None
+        imagen = m.get("url") or m.get("preview_image_url")
+        if url_ok(imagen):
+            salida.append({"tipo": m.get("type", "photo"), "imagen": imagen})
+    return salida
+
+
+RE_USUARIO_X = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+
+
+def normalizar_usuario_x(texto: str) -> str | None:
+    """Acepta 'elonmusk', '@elonmusk' o un link de x.com / twitter.com. Devuelve None si no es válido."""
+    texto = (texto or "").strip()
+    m = re.search(r"(?<![A-Za-z0-9])(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})", texto)
+    if m:
+        texto = m.group(1)
+    texto = texto.lstrip("@").strip()
+    return texto if RE_USUARIO_X.match(texto) else None
 
 
 class ClienteX:
@@ -403,7 +418,7 @@ class ClienteX:
         params = {
             "query": query,
             "max_results": 100 if since_id else 10,
-            "tweet.fields": "created_at,author_id,entities,attachments,note_tweet",
+            "tweet.fields": "created_at,author_id,entities,attachments,note_tweet,referenced_tweets",
             "expansions": "attachments.media_keys",
             "media.fields": "url,preview_image_url,type",
         }

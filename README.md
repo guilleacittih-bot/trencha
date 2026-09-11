@@ -13,7 +13,17 @@ Cada alerta de token trae: logo, banner, precio, market cap, liquidez, volumen, 
 
 Cuando un influencer publica un **contrato** o un **$TICKER**, el bot lo busca en DexScreener y agrega los datos del token al mismo mensaje.
 
-Comandos: `/token <contrato o $TICKER>` y `/estado`.
+Comandos:
+
+| Comando | Qué hace | Quién puede usarlo |
+|---|---|---|
+| `/add usuario:elonmusk` | Agrega una cuenta de X. Opciones: `modo` (todo / solo cripto) y `canal` (canal propio para esa cuenta) | Admins (Gestionar servidor) |
+| `/quitar usuario:elonmusk` | Deja de seguir una cuenta (autocompleta) | Admins (Gestionar servidor) |
+| `/cuentas` | Lista las cuentas seguidas | Todos |
+| `/token <contrato o $TICKER>` | Ficha de cualquier token | Todos |
+| `/estado` | Estado de las fuentes | Todos |
+
+Cada post de X llega con foto de perfil, texto completo, hora de publicación (en la hora local de cada usuario y "hace X minutos"), tipo de post, hasta 4 imágenes en galería, aviso de video, links que incluye el post y datos de los tokens que mencione. Cada cuenta que agregás suma lecturas en la API de X: para cuentas que publican muchísimo conviene `modo: solo cripto`.
 
 ---
 
