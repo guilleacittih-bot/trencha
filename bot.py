@@ -91,6 +91,10 @@ class Radar(discord.Client):
             servidor = discord.Object(id=int(gid))
             self.tree.copy_global_to(guild=servidor)
             await self.tree.sync(guild=servidor)
+            # borra comandos globales viejos (ej. de otro bot que usó esta misma aplicación)
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
+            log.info("Comandos /token y /estado registrados en el servidor %s", gid)
         else:    # global: puede tardar en aparecer
             await self.tree.sync()
 
