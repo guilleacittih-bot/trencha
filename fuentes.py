@@ -375,26 +375,62 @@ def normalizar_usuario_x(texto: str) -> str | None:
     return texto if RE_USUARIO_X.match(texto) else None
 
 
+class ErrorFuente(Exception):
+    """Error esperable de una fuente (token inválido, sin créditos...): se muestra sin traceback."""
+
+
+EXPLICACION_X = {
+    0: "no se pudo conectar con X (error de red)",
+    400: "X rechazó la búsqueda",
+    401: "el Bearer Token es inválido o fue regenerado: actualizá X_BEARER_TOKEN en Railway",
+    402: "no hay créditos en tu cuenta de X: cargá saldo en el Developer Console",
+    403: "tu app de X no tiene acceso a este endpoint o le faltan créditos: revisá el Developer Console",
+    429: "se alcanzó el límite de uso de X: esperá unos minutos",
+}
+
+
+def explicar_error_x(error: tuple[int, str] | None) -> str:
+    if not error:
+        return "error desconocido"
+    estado, detalle = error
+    texto = EXPLICACION_X.get(estado, f"X respondió con error {estado}")
+    return f"{texto} (código {estado}{': ' + detalle if detalle else ''})"
+
+
 class ClienteX:
     """Cliente mínimo de la API v2 de X. Se cobra por recurso devuelto: se pide solo lo necesario."""
 
     def __init__(self, http: Http, bearer: str):
         self.http = http
         self.headers = {"Authorization": f"Bearer {bearer}"}
+        self.ultimo_error: tuple[int, str] | None = None
+
+    @staticmethod
+    def _detalle(cuerpo: str) -> str:
+        try:
+            data = json.loads(cuerpo)
+            detalle = data.get("detail") or data.get("title") or (data.get("errors") or [{}])[0].get("message", "")
+        except (ValueError, AttributeError, IndexError):
+            detalle = cuerpo
+        return (detalle or "")[:150]
 
     async def _get(self, ruta: str, params: dict):
+        self.ultimo_error = None
         try:
             async with self.http.session.get(f"{X_API}{ruta}", params=params, headers=self.headers) as r:
                 cuerpo = await r.text()
                 if r.status == 429:
                     log.warning("X API: límite de uso alcanzado (reset: %s)", r.headers.get("x-rate-limit-reset"))
+                    self.ultimo_error = (429, "")
                     return 429, None
                 if r.status >= 400:
                     log.error("X API %s en %s: %s", r.status, ruta, cuerpo[:500])
+                    self.ultimo_error = (r.status, self._detalle(cuerpo))
                     return r.status, cuerpo
                 return r.status, json.loads(cuerpo)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
             log.warning("X API: fallo de red: %s", e)
+            self.ultimo_error = (0, str(e)[:150])
             return 0, None
 
     async def usuarios(self, nombres: list[str]) -> dict[str, dict]:

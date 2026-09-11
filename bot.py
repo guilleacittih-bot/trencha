@@ -133,6 +133,10 @@ class Radar(discord.Client):
                     log.info("Fuente '%s' lista: desde ahora anuncia lo nuevo", nombre)
             except asyncio.CancelledError:
                 raise
+            except F.ErrorFuente as e:
+                log.warning("Fuente '%s': %s", nombre, e)
+                self.estado[nombre]["errores"] += 1
+                self.estado[nombre]["ultimo_error"] = str(e)[:200]
             except Exception as e:  # un error en una fuente no debe tumbar el bot
                 log.exception("Error en el ciclo '%s'", nombre)
                 self.estado[nombre]["errores"] += 1
@@ -337,11 +341,13 @@ class Radar(discord.Client):
         # desde el post más nuevo ya visto, así no se pierde nada ni se repiten posts viejos.
         since_global = self.db.get("x_since_global")
         nuevo_global = int(since_global) if since_global else 0
+        fallos = []
         for q in queries:
             qid = hashlib.sha1(q.encode()).hexdigest()[:12]
             since = self.db.get(f"x_since:{qid}") or since_global
             res = await self.x.buscar(q, since)
             if res is None:
+                fallos.append(self.x.ultimo_error)
                 continue
             if res["newest"]:
                 self.db.set(f"x_since:{qid}", res["newest"])
@@ -356,6 +362,8 @@ class Radar(discord.Client):
                 await self._publicar_post(post, res["media"], cuentas)
         if nuevo_global:
             self.db.set("x_since_global", str(nuevo_global))
+        if fallos and len(fallos) == len(queries):
+            raise F.ErrorFuente(F.explicar_error_x(fallos[-1]))
 
     async def _publicar_post(self, post: dict, media: dict, cuentas: dict):
         autor = self.usuarios_x.get(post.get("author_id"), {})
@@ -471,27 +479,30 @@ def registrar_comandos(bot: Radar):
     async def add(inter: discord.Interaction, usuario: str,
                   modo: app_commands.Choice[str] | None = None,
                   canal: discord.TextChannel | None = None):
+        await inter.response.defer(thinking=True)  # primero: Discord exige respuesta en 3 segundos
         if not bot.x:
-            await inter.response.send_message("⛔ X no está activo: falta la variable `X_BEARER_TOKEN` en Railway.", ephemeral=True)
+            await inter.followup.send("⛔ X no está activo: falta la variable `X_BEARER_TOKEN` en Railway.")
             return
         nombre = F.normalizar_usuario_x(usuario)
         if not nombre:
-            await inter.response.send_message(
+            await inter.followup.send(
                 "❌ Poné el **usuario** de X, no el nombre: es lo que va después de la @ "
-                "(ej. `/add usuario:elonmusk`). También podés pegar el link del perfil.", ephemeral=True)
+                "(ej. `/add usuario:elonmusk`). También podés pegar el link del perfil.")
             return
         if canal:
             permisos = canal.permissions_for(canal.guild.me)
             if not (permisos.view_channel and permisos.send_messages and permisos.embed_links):
-                await inter.response.send_message(
+                await inter.followup.send(
                     f"❌ No tengo permisos para escribir en {canal.mention} "
-                    "(necesito Ver canal, Enviar mensajes e Insertar enlaces).", ephemeral=True)
+                    "(necesito Ver canal, Enviar mensajes e Insertar enlaces).")
                 return
-        await inter.response.defer(thinking=True)
         encontrados = await bot.x.usuarios([nombre])
         perfil = next((u for u in encontrados.values() if u["username"].lower() == nombre.lower()), None)
         if not perfil:
-            await inter.followup.send(f"❌ No encontré la cuenta **@{nombre}** en X (¿está bien escrita? ¿es pública?).")
+            if bot.x.ultimo_error:
+                await inter.followup.send(f"⚠️ No pude consultar X: {F.explicar_error_x(bot.x.ultimo_error)}.")
+            else:
+                await inter.followup.send(f"❌ No encontré la cuenta **@{nombre}** en X (¿está bien escrita? ¿es pública?).")
             return
         valor_modo = modo.value if modo else "todo"
         canal_id = str(canal.id) if canal else None
